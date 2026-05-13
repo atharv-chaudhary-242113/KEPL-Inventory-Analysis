@@ -30,9 +30,8 @@ This project is a **Procurement Analytics and Inventory Forecasting System** for
 
 - **ABC Category Classification** of all procured items, based on consumption value.
 - **Monthly and Quarterly Reorder Quantity Estimates** per item, so that stock ordered once in a period does not need to be reordered within the same period.
-- An **Excel/CSV output report** the user can save anywhere on their machine.
+- An **Excel output report** the user can save anywhere on their machine.
 - A **clean GUI** that any non-technical user can operate after a one-time setup.
-- A **CLI/headless mode** that can be run directly as a Python script without the GUI.
 
 The system is designed to be **extended easily** — most notably when a Closing Stock dataset becomes available — without rewriting any existing logic.
 
@@ -98,7 +97,13 @@ A single POV line item (e.g., 60 units of Item A from Supplier Z) may arrive as 
 - Forward-fill `Date`, `Vch/Bill No`, `Particulars` within each voucher block.
 - Parse `Date` to `datetime`.
 - Cast `Qty.`, `Price`, `Amount` to numeric (coerce errors to NaN, then drop or flag).
+- Reject any input file exceeding 5 MB before loading — a clear error is raised with the actual file size and a suggestion to export a smaller date range from Tally.
 - Filter out non-item rows (e.g., "Freight Charges", rows with `-` in Unit, rows where `Item Details` contains tax/freight keywords).
+- Normalise `Item Details` and `Particulars` by stripping whitespace and applying `.str.lower()` to eliminate case-sensitive duplicate grouping.
+- Flag similar item names using TF-IDF + cosine similarity (character n-grams, threshold 0.85, validated to be between 0.5 and 1.0) — logs warnings for likely duplicates, no auto-merge.
+- Flag similar supplier names using the same TF-IDF method.
+- Sanitise all string cell values before Excel export — strings beginning with `=`, `+`, `-`, or `@` are prefixed with a single quote on a **copy** of the DataFrame, so the original data shown in the GUI remains unaffected.
+- Resolve the log directory path relative to the project root using `Path(__file__).resolve()` — not the current working directory.
 
 ### Step 2 — Normalise & Link
 - Build a unified item-level dataframe from PV (the most reliable consumption signal, since it records what was actually billed/paid).
@@ -136,7 +141,7 @@ This project follows **SOLID** principles with special emphasis on **KISS** (Kee
 | **S** — Single Responsibility | Each class/module does exactly one job. `DataParser` only parses. `ABCClassifier` only classifies. `ForecastEngine` only forecasts. The GUI only handles user interaction. |
 | **O** — Open/Closed | New dataset types (e.g., Closing Stock) are added by writing a **new loader class** that conforms to the `BaseLoader` interface — no existing loader is modified. Similarly, new analysis strategies (e.g., EOQ when cost data is available) are added as new strategy classes. |
 | **L** — Liskov Substitution | All loaders are interchangeable through the `BaseLoader` abstract class. |
-| **I** — Interface Segregation | The GUI and the CLI consume the same `AnalysisPipeline` but through thin, purpose-specific interfaces. |
+| **I** — Interface Segregation | The GUI consumes `AnalysisPipeline` through a thin, purpose-specific interface. |
 | **D** — Dependency Inversion | High-level modules (`AnalysisPipeline`) depend on abstractions, not concrete implementations. |
 
 **KISS** is enforced by avoiding unnecessary abstraction layers. There are no factories-of-factories. Every class has a clear, plain-English purpose.
@@ -158,6 +163,9 @@ procurement-analytics/
 │
 ├── output/                        # ← (gitignored) Generated reports land here by default
 │
+├── models/                        # ← (gitignored) Persisted ML models
+│   └── lead_time_predictor.joblib # Saved after each successful training run
+│
 ├── logs/                          # ← Application logs
 │   └── app.log
 │
@@ -173,14 +181,16 @@ procurement-analytics/
 │   │
 │   ├── processors/                # Business logic layer
 │   │   ├── __init__.py
-│   │   ├── data_cleaner.py        # Forward-fill, type casting, row filtering
+│   │   ├── data_cleaner.py        # Forward-fill, type casting, row filtering, deduplication flagging
 │   │   ├── item_linker.py         # Links POV → GRN → PV by (Item, Supplier, approximate date)
 │   │   ├── lead_time_calculator.py# Computes empirical lead time per (Item, Supplier)
+│   │   ├── lead_time_predictor.py # RandomForest-based lead time prediction with joblib persistence
 │   │   └── demand_aggregator.py   # Aggregates qty by item, month, quarter
 │   │
 │   ├── analysis/                  # Analysis layer
 │   │   ├── __init__.py
 │   │   ├── abc_classifier.py      # ABC classification logic
+│   │   ├── anomaly_detector.py    # IsolationForest-based procurement anomaly detection
 │   │   ├── base_forecast_strategy.py  # Abstract forecast strategy (OCP hook)
 │   │   ├── simple_forecast.py     # Avg-based monthly & quarterly forecast (no stock data)
 │   │   └── stock_adjusted_forecast.py # STUB — activates when closing stock data is present
@@ -210,7 +220,6 @@ procurement-analytics/
 │       ├── status_bar.py          # Bottom status bar showing current operation
 │       └── abc_chart_widget.py    # Embedded matplotlib Pareto chart
 │
-├── main.py                        # CLI entry point — runs pipeline without GUI
 ├── run_gui.py                     # GUI entry point — launches the tkinter app
 ├── requirements.txt               # All dependencies pinned
 ├── .gitignore
@@ -222,16 +231,6 @@ procurement-analytics/
 ## 6. File-by-File Description
 
 ### Root Level
-
-**`main.py`**
-The headless CLI entry point. Accepts command-line arguments for each file path and the output path. Instantiates `AnalysisPipeline` and runs it. Exits with code `0` on success, `1` on failure. All progress is written to the log. Example:
-```bash
-python main.py \
-  --pov data/purchase_orders/Purchase_Order_Vouchers.csv \
-  --grn data/grn/GRN.csv \
-  --pv  data/purchase_vouchers/Purchase_Vouchers.csv \
-  --out output/report.xlsx
-```
 
 **`run_gui.py`**
 The GUI entry point. Imports and launches `gui/app.py`. No logic here — its sole job is to start the GUI event loop.
@@ -250,18 +249,20 @@ Described fully in §16.
 Defines `BaseLoader`, an abstract class with one mandatory method: `load(filepath: str) -> pd.DataFrame`. All concrete loaders inherit from this. This is the OCP hook — adding a new document type means writing a new class, not modifying existing ones.
 
 **`grn_loader.py`** — `class GRNLoader(BaseLoader)`
+- Checks the file size before loading — raises a `ValueError` with a clear message if the file exceeds 5 MB (5 × 1024 × 1024 bytes), including the actual file size and a suggestion to export a smaller date range from Tally.
 - Reads the CSV, skips rows 0–5 (metadata), uses row 6 as header.
 - Forward-fills `Date`, `Vch/Bill No`, `Particulars`.
 - Parses `Date` as `datetime`.
 - Casts `Qty.`, `Price`, `Amount` to float.
 - Filters out freight/tax rows (where `Unit == '-'` or `Item Details` matches known non-item patterns like "Freight Charges").
+- Logs only the filename (not the full path) at DEBUG level.
 - Returns a clean DataFrame with consistent column names.
 
 **`pov_loader.py`** — `class POVLoader(BaseLoader)`
-Identical structure to GRNLoader but for Purchase Order Vouchers. The voucher number prefix will be `PO/...`.
+Identical structure to GRNLoader, including the 5 MB file size check, but for Purchase Order Vouchers. The voucher number prefix will be `PO/...`.
 
 **`pv_loader.py`** — `class PVLoader(BaseLoader)`
-Identical structure but for Purchase Vouchers.
+Identical structure, including the 5 MB file size check, but for Purchase Vouchers.
 
 **`closing_stock_loader.py`** — `class ClosingStockLoader(BaseLoader)`
 A **stub** that is already wired into the pipeline but returns `None` when no file is provided. When the dataset arrives, only this file needs to be filled in. Handles four sub-formats selectable by the user: `daily`, `weekly`, `monthly`, `quarterly`. Each sub-format normalises the data into the same output schema: `(Item Details, Particulars, Period, Closing Qty)`.
@@ -275,10 +276,13 @@ A stateless utility (all static methods). Responsibilities:
 - `forward_fill_voucher_fields(df)`: fills down `Date`, `Vch/Bill No`, `Particulars` within each file.
 - `cast_numeric_columns(df)`: casts quantity/price/amount columns to float with `errors='coerce'`.
 - `drop_non_item_rows(df)`: removes rows identified as freight, tax, or summary rows.
-- `normalise_item_names(df)`: strips leading/trailing whitespace from `Item Details` and `Particulars` (critical for correct grouping).
+- `normalise_item_names(df)`: strips leading/trailing whitespace from `Item Details` and `Particulars` and applies `.str.lower()` to both — eliminating case-sensitive duplicate grouping.
+- `flag_similar_item_names(df, threshold=0.85)`: validates that `threshold` is between 0.5 and 1.0 (raises `ValueError` otherwise), then uses TF-IDF vectorisation with character n-grams (range 2–4) and cosine similarity to detect near-duplicate item names. Logs warnings only — does not modify data. Human review required before any merge.
+- `flag_similar_supplier_names(df, threshold=0.85)`: same validation and logic applied to `Particulars` (supplier names).
+- `sanitise_for_export(df)`: creates a copy of the DataFrame (`df.copy()`) at the start, then iterates all string columns on the copy and prepends `'` to any value beginning with `=`, `+`, `-`, or `@`, preventing Excel formula injection. Returns the sanitised copy — the original DataFrame passed in is never mutated, so the GUI's in-memory data remains unaffected.
 
 **`item_linker.py`** — `class ItemLinker`
-Responsible for creating a unified view of `(Item Details, Particulars)` across all three datasets. It does a **fuzzy date-windowed join**: for each POV entry, it looks for matching GRN and PV entries within a configurable day window (default: ±30 days) with the same `Item Details` and `Particulars`. This handles split deliveries naturally — multiple GRN rows matching one POV row are aggregated. Returns a linked DataFrame with columns from all three sources side by side, plus a `lead_time_days` column.
+Responsible for creating a unified view of `(Item Details, Particulars)` across all three datasets. It does a **fuzzy date-windowed join**: for each POV entry, it looks for matching GRN and PV entries within a configurable day window (default: ±14 days) with the same `Item Details` and `Particulars`. An additional **quantity proximity check** ensures only GRN entries whose quantity falls within 2× of the POV quantity are linked, preventing cross-linking of genuinely separate orders that fall within the date window. This handles split deliveries naturally — multiple GRN rows matching one POV row are aggregated. Returns a linked DataFrame with columns from all three sources side by side, plus a `lead_time_days` column.
 
 **`lead_time_calculator.py`** — `class LeadTimeCalculator`
 Takes the output of `ItemLinker` and computes, per `(Item Details, Particulars)`:
@@ -287,17 +291,30 @@ Takes the output of `ItemLinker` and computes, per `(Item Details, Particulars)`
 - `min_lead_time_days`
 - `max_lead_time_days`
 
-These are informational in the current version; they will feed into safety stock calculations when closing stock data is available.
+Logs a `WARNING` for any item-supplier pair with fewer than 3 matched observations, as averages computed from very few samples are unreliable. These feed into the `LeadTimePredictor` model and will also feed into safety stock calculations when closing stock data is available.
+
+**`lead_time_predictor.py`** — `class LeadTimePredictor`
+Trains a `RandomForestRegressor(random_state=42)` on historical POV→GRN matched records, ensuring fully reproducible predictions across runs. Features used: `item_encoded`, `supplier_encoded`, `order_qty`, `month_of_year`. Target: `actual_lead_time_days`.
+
+Falls back to the empirical average from `LeadTimeCalculator` under two conditions:
+- Fewer than 30 training samples exist for a given item-supplier pair.
+- After an 80/20 train/test split, the model's Mean Absolute Error is not lower than the MAE of simply predicting the empirical average for every row — in which case the model is discarded and a `WARNING` is logged.
+
+After a successful training run that passes the quality check, the fitted model is persisted to `models/lead_time_predictor.joblib` using `joblib.dump`. On subsequent runs, if this file exists, the model is loaded from disk instead of retraining, reducing run time as the dataset grows. The persisted model is gitignored.
+
+Exposes `predict(item, supplier, qty, month) -> float`.
 
 **`demand_aggregator.py`** — `class DemandAggregator`
 Takes the cleaned PV DataFrame (the final billing record, most reliable for actual consumption). Groups by `(Item Details, Particulars, Unit)`. Computes:
 - `total_qty`: total quantity purchased across the full date range.
 - `total_value`: total spend (sum of `Amount`).
 - `avg_unit_price`: weighted average unit price.
-- `months_covered`: number of distinct calendar months in the data.
+- `months_covered`: number of distinct calendar months present in the data (computed via `df['Date'].dt.to_period('M').nunique()`).
 - `avg_monthly_qty`: `total_qty / months_covered`.
 - `avg_quarterly_qty`: `avg_monthly_qty × 3`.
 - `month_year` column for time-series breakdown.
+
+Logs a `WARNING` for any item where `avg_monthly_qty` computes to `0` after filtering, indicating all rows were dropped and the reorder recommendation will be zero — prompting the user to check the source data.
 
 ---
 
@@ -314,6 +331,13 @@ Defines the interface: `compute(aggregated_df: pd.DataFrame, closing_stock_df: p
 - Returns the DataFrame with an `abc_class` column appended.
 - The thresholds (70, 90) are configurable as constructor parameters so they can be adjusted without touching logic.
 
+**`anomaly_detector.py`** — `class AnomalyDetector`
+Runs `IsolationForest(contamination='auto', random_state=42)` on all procurement records after cleaning. Using `contamination='auto'` allows the algorithm to determine the anomaly threshold from the data itself, based on the scoring method defined in the original IsolationForest paper — rather than assuming a fixed percentage. `random_state=42` ensures results are reproducible across runs.
+
+Features used: `unit_price`, `qty`, `month_of_year`. The `amount` column is intentionally excluded — since `amount = qty × unit_price`, including it would introduce multicollinearity and skew isolation scores toward amount outliers rather than independently unusual prices or quantities.
+
+`contamination` is a configurable constructor parameter (defaulting to `'auto'`) so it can be overridden if needed without touching any logic. Appends two columns to the DataFrame: `is_anomaly` (boolean) and `anomaly_score` (float — the raw isolation score). Anomalous rows are flagged in the Excel output under the `Anomaly Report` sheet and logged as `WARNING` entries. No records are dropped — flagging only.
+
 **`simple_forecast.py`** — `class SimpleForecastStrategy(BaseForecastStrategy)`
 The active strategy when no closing stock data is available.
 - `monthly_reorder_qty = ceil(avg_monthly_qty)` — rounded up to avoid stockouts.
@@ -326,7 +350,7 @@ When activated (by passing closing stock data), this strategy will subtract clos
 net_monthly_demand = gross_monthly_demand - avg_closing_stock
 monthly_reorder_qty = ceil(net_monthly_demand)
 ```
-This file exists today but raises `NotImplementedError` with a clear message explaining it requires closing stock data. It will be filled in when that dataset arrives, with zero changes to the rest of the codebase.
+This file exists today but raises `NotImplementedError` with a clear message explaining it requires closing stock data. The pipeline catches this exception, logs a warning, and automatically falls back to `SimpleForecastStrategy` — so no crash occurs if a user accidentally provides a closing stock file before this stub is implemented. It will be filled in when that dataset arrives, with zero changes to the rest of the codebase.
 
 ---
 
@@ -336,19 +360,24 @@ This file exists today but raises `NotImplementedError` with a clear message exp
 Defines: `export(results: dict, output_path: str) -> None`.
 
 **`excel_exporter.py`** — `class ExcelExporter(BaseExporter)`
+Calls `DataCleaner.sanitise_for_export()` on every DataFrame before writing any sheet, preventing formula injection across all output including Raw sheets. The sanitised copy is used for writing only — the original DataFrames in the `results` dict are not modified.
+
+Respects the `include_anomaly_report` flag in the pipeline `config` dict (defaults to `True`). When set to `False`, the `Anomaly Report` sheet is omitted from the output — useful for reports shared externally with vendors or auditors.
+
 Writes a multi-sheet `.xlsx` file using `openpyxl`. Sheets produced:
 
 | Sheet Name | Contents |
 |---|---|
 | `Summary` | Run metadata: date range of data, files used, items processed, run timestamp |
-| `ABC Classification` | Full item list with ABC class, total qty, total value, avg unit price, supplier |
+| `ABC Classification` | Full item list with ABC class, total qty, total value, avg unit price, supplier. Rows flagged by `AnomalyDetector` are highlighted in red with an `Anomaly` column set to `True` and an `Anomaly Score` column showing the raw isolation score. |
 | `Monthly Forecast` | Per-item monthly reorder quantity recommendation |
 | `Quarterly Forecast` | Per-item quarterly reorder quantity recommendation |
 | `Monthly Breakdown` | Actual qty per item per calendar month (pivot table) |
 | `Lead Times` | Computed lead time stats per (item, supplier) |
-| `Raw GRN` | Cleaned GRN data |
-| `Raw POV` | Cleaned POV data |
-| `Raw PV` | Cleaned PV data |
+| `Anomaly Report` | All rows flagged as anomalous by IsolationForest, with item, supplier, qty, price, month, and anomaly score. Omitted if `include_anomaly_report` is `False`. |
+| `Raw GRN` | Cleaned GRN data — formula injection sanitised |
+| `Raw POV` | Cleaned POV data — formula injection sanitised |
+| `Raw PV` | Cleaned PV data — formula injection sanitised |
 
 Each sheet has **frozen top row**, **auto-filtered columns**, alternating row colours per ABC class in the ABC sheet, and conditional formatting (green/amber/red) on the reorder quantity columns.
 
@@ -358,24 +387,27 @@ Each sheet has **frozen top row**, **auto-filtered columns**, alternating row co
 
 The single orchestrator. Has one public method: `run()`. Internally:
 
-1. Calls each loader.
-2. Passes raw DataFrames through `DataCleaner`.
-3. Runs `DemandAggregator` on PV data.
-4. Runs `ABCClassifier`.
-5. Runs `LeadTimeCalculator` on linked data from `ItemLinker`.
-6. Selects the correct forecast strategy (`SimpleForecastStrategy` if no closing stock, else `StockAdjustedForecastStrategy`).
-7. Calls `ExcelExporter`.
-8. Returns a `results` dict for the GUI to consume for live display.
+1. Validates all input file paths for existence before starting any processing step — raises a clear error if any required file is missing.
+2. Calls each loader (file size validation occurs inside each loader before any data is read).
+3. Passes raw DataFrames through `DataCleaner` (including TF-IDF duplicate flagging and export sanitisation).
+4. Runs `DemandAggregator` on PV data.
+5. Runs `ABCClassifier`.
+6. Runs `LeadTimeCalculator` on linked data from `ItemLinker`.
+7. Runs `LeadTimePredictor` — loads a persisted model if available, otherwise trains from scratch and saves. Falls back to empirical averages if fewer than 30 samples exist or if the model does not outperform the empirical baseline MAE.
+8. Runs `AnomalyDetector` on all cleaned procurement records.
+9. Selects the correct forecast strategy (`SimpleForecastStrategy` if no closing stock, else `StockAdjustedForecastStrategy`). Wraps the strategy's `compute()` call in a `try/except NotImplementedError` — if raised, logs a warning and falls back to `SimpleForecastStrategy` automatically.
+10. Calls `ExcelExporter`.
+11. Returns a `results` dict for the GUI to consume for live display.
 
-The pipeline is instantiated with a `config` dict — file paths, output path, closing stock path (optional), thresholds. This makes it trivially testable and callable from both GUI and CLI.
+The pipeline is instantiated with a `config` dict — file paths, output path, closing stock path (optional), ABC thresholds, and `include_anomaly_report` (boolean, default `True`). This makes it trivially testable and callable from the GUI.
 
 ---
 
 ### `src/logger_config.py`
 
 Sets up Python's standard `logging` module:
-- A **file handler** writing to `logs/app.log` at `DEBUG` level (full detail).
-- A **stream/console handler** at `INFO` level (for CLI use).
+- A **file handler** writing to `logs/app.log` at `DEBUG` level (full detail). The log path is always resolved as an absolute path relative to the project root via `Path(__file__).resolve().parent.parent / 'logs' / 'app.log'` — independent of the working directory the user invokes the script from.
+- A **stream/console handler** at `INFO` level.
 - Log rotation: `RotatingFileHandler` — max 5 MB per file, keeps 3 backups.
 - Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL] [module] — message`.
 
@@ -413,7 +445,7 @@ The "Configure Output" panel. Contains:
 - A `FolderPicker` widget to browse the output directory.
 - A text entry field for the output filename (defaults to `report_YYYYMMDD.xlsx`).
 - A summary of the currently selected input files.
-- A prominent **"▶ Run Analysis"** button that triggers `AnalysisPipeline.run()` in a **background thread** (using `threading.Thread` so the GUI doesn't freeze).
+- A prominent **"▶ Run Analysis"** button that triggers `AnalysisPipeline.run()` in a **background thread** (using `threading.Thread` so the GUI doesn't freeze). Results are passed back to the main thread via a `queue.Queue`, checked every 100ms using `after(100, self._check_queue)` — no widget is ever updated directly from the background thread, preventing tkinter thread-safety crashes.
 
 **`results_view.py`**
 The "Run & Results" panel. Shown after a successful run. Contains:
@@ -423,7 +455,7 @@ The "Run & Results" panel. Shown after a successful run. Contains:
 - An **"Open Output File"** button that opens the Excel file in the system's default application.
 
 **`log_view.py`**
-The "Logs" panel. A read-only `ScrolledText` widget that tails `logs/app.log` in real time using a polling loop (`after(500, self.refresh)`). Colour-coded: DEBUG (grey), INFO (black), WARNING (amber), ERROR (red).
+The "Logs" panel. A read-only `ScrolledText` widget that tails `logs/app.log` in real time using a polling loop (`after(500, self.refresh)`). Tracks the last-read byte position via `self._log_offset` — only new bytes are read on each poll, keeping performance stable regardless of total log file size. Colour-coded: DEBUG (grey), INFO (black), WARNING (amber), ERROR (red).
 
 ---
 
@@ -473,18 +505,19 @@ The thresholds `(70, 90)` are passed as constructor arguments to `ABCClassifier`
 ## 8. Monthly & Quarterly Forecasting Logic
 
 ### Data Range Detection
-The system reads the minimum and maximum `Date` values across the PV dataset and computes:
+The system counts the number of distinct calendar months actually present in the PV dataset:
 ```
-months_covered = (max_date.year - min_date.year) * 12 + (max_date.month - min_date.month) + 1
+months_covered = df['Date'].dt.to_period('M').nunique()
 ```
+This counts only months that have actual data, eliminating the overcounting problem of arithmetic date-range formulas.
 
 ### Per-Item Aggregation
 For each `(Item Details, Particulars, Unit)`:
 ```
-total_qty        = sum of Qty. across all PV rows
-avg_monthly_qty  = total_qty / months_covered
-avg_quarterly_qty = avg_monthly_qty * 3
-monthly_reorder_qty  = ceil(avg_monthly_qty)
+total_qty             = sum of Qty. across all PV rows
+avg_monthly_qty       = total_qty / months_covered
+avg_quarterly_qty     = avg_monthly_qty * 3
+monthly_reorder_qty   = ceil(avg_monthly_qty)
 quarterly_reorder_qty = ceil(avg_quarterly_qty)
 ```
 
@@ -567,36 +600,13 @@ The GUI is inspired by analytics tools like **Power BI Desktop** and **Talend Da
 - If a required file is not selected, the Run button shows a validation error in red before starting.
 - If the pipeline throws an exception, a `messagebox.showerror` dialog shows the error, and the full traceback is written to the log.
 - All file paths are validated for existence before the pipeline is invoked.
+- The pipeline runs in a background thread. All widget updates after completion are marshalled back to the main thread via `queue.Queue` and `after()` polling — preventing tkinter thread-safety crashes.
 
 ---
 
 ## 11. CLI (Headless) Mode
 
-For automated runs, scheduled tasks, or users who prefer the terminal:
-
-```bash
-python main.py \
-  --pov  "path/to/Purchase_Order_Vouchers.csv" \
-  --grn  "path/to/GRN.csv" \
-  --pv   "path/to/Purchase_Vouchers.csv" \
-  --out  "path/to/output/report.xlsx" \
-  [--closing-stock "path/to/closing_stock.csv" --cs-freq monthly]
-```
-
-**Arguments:**
-
-| Argument | Required | Description |
-|---|---|---|
-| `--pov` | Yes | Path to Purchase Order Vouchers CSV |
-| `--grn` | Yes | Path to GRN CSV |
-| `--pv` | Yes | Path to Purchase Vouchers CSV |
-| `--out` | Yes | Full path for output Excel file |
-| `--closing-stock` | No | Path to closing stock CSV (activates adjusted forecast) |
-| `--cs-freq` | No | Closing stock frequency: `daily`, `weekly`, `monthly`, `quarterly` |
-| `--abc-a` | No | A-class threshold (default: 70) |
-| `--abc-b` | No | B-class threshold (default: 90) |
-
-Progress and errors are printed to the console at INFO level and also written to `logs/app.log`.
+> **Deferred.** CLI support is planned as a future addition (see §18). The GUI is the only supported entry point at this time.
 
 ---
 
@@ -610,19 +620,26 @@ Key formatting details:
 - The Monthly Forecast and Quarterly Forecast sheets include a "Recommended Order Qty" column in bold.
 - All numeric columns use the Indian number format (e.g., `1,00,000`) since this is an Indian company.
 - The Summary sheet includes a plain-language interpretation of the ABC results.
+- All Raw sheets (`Raw GRN`, `Raw POV`, `Raw PV`) have formula injection sanitisation applied before writing — any cell value beginning with `=`, `+`, `-`, or `@` is stored as plain text.
+- The `Anomaly Report` sheet is included by default. It can be suppressed by setting `include_anomaly_report: False` in the pipeline config — useful for reports shared externally.
 
 ---
 
 ## 13. Logging
 
-**Location:** `logs/app.log`
+**Location:** `logs/app.log`, always resolved as an absolute path relative to the project root — the tool can be invoked from any working directory without affecting log output.
 
 **Format:**
 ```
 [2025-04-01 09:15:32] [INFO]  [pipeline] — Starting analysis pipeline
-[2025-04-01 09:15:32] [DEBUG] [grn_loader] — Reading file: data/grn/GRN.csv
+[2025-04-01 09:15:32] [DEBUG] [grn_loader] — Reading file: GRN.csv
 [2025-04-01 09:15:33] [INFO]  [grn_loader] — Loaded 22,619 rows after cleaning
 [2025-04-01 09:15:33] [WARNING] [data_cleaner] — 47 rows dropped (freight/tax entries)
+[2025-04-01 09:15:33] [WARNING] [data_cleaner] — Similar item names detected: 'Copper Wire 4mm' vs 'copper wire 4 mm' [score: 0.923]
+[2025-04-01 09:15:33] [WARNING] [demand_aggregator] — Item 'Freight Clip' has avg_monthly_qty=0 after filtering. Reorder qty will be 0.
+[2025-04-01 09:15:33] [WARNING] [pipeline] — StockAdjustedForecastStrategy not implemented. Falling back to SimpleForecastStrategy.
+[2025-04-01 09:15:33] [WARNING] [lead_time_predictor] — Model MAE (4.2 days) not better than baseline (3.9 days). Falling back to empirical average.
+[2025-04-01 09:15:33] [WARNING] [anomaly_detector] — 3 anomalous procurement record(s) flagged. See Anomaly Report sheet.
 [2025-04-01 09:15:35] [INFO]  [abc_classifier] — 312 unique items classified: A=28, B=61, C=223
 [2025-04-01 09:15:36] [INFO]  [excel_exporter] — Report saved to output/report_20250401.xlsx
 [2025-04-01 09:15:36] [INFO]  [pipeline] — Analysis complete in 4.2s
@@ -658,7 +675,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 4. Create required directories (first-time only)
-mkdir -p data/grn data/purchase_orders data/purchase_vouchers data/closing_stock output logs
+mkdir -p data/grn data/purchase_orders data/purchase_vouchers data/closing_stock output logs models
 ```
 
 No configuration files need to be edited. The GUI handles all path selection interactively.
@@ -667,22 +684,11 @@ No configuration files need to be edited. The GUI handles all path selection int
 
 ## 15. Running the Project
 
-### GUI Mode (Recommended for non-technical users)
+### GUI Mode
 ```bash
 python run_gui.py
 ```
 The window opens at full screen. Follow the three-step workflow in the GUI.
-
-### CLI Mode (For automation or advanced users)
-```bash
-python main.py \
-  --pov "Purchase_Order_Vouchers.csv" \
-  --grn "GRN.csv" \
-  --pv  "Purchase_Vouchers.csv" \
-  --out "output/report.xlsx"
-```
-
-Both modes write to the same log file.
 
 ---
 
@@ -699,6 +705,9 @@ data/
 
 # === Output files ===
 output/
+
+# === Trained ML models ===
+models/
 
 # === Logs ===
 logs/
@@ -731,7 +740,7 @@ Thumbs.db
 htmlcov/
 ```
 
-> **Note:** The three input CSV files and all Excel outputs are gitignored by default. When sharing the repo, users supply their own data files.
+> **Note:** The three input CSV files, all Excel outputs, and all trained model files are gitignored by default. When sharing the repo, users supply their own data files and models are rebuilt on first run.
 
 ---
 
@@ -742,9 +751,12 @@ pandas>=2.0
 openpyxl>=3.1
 matplotlib>=3.7
 numpy>=1.24
+scikit-learn>=1.3
 ```
 
-All four are widely maintained, pip-installable, and have no C-extension compilation requirements on Windows. `tkinter` is part of the Python standard library and requires no separate installation on Windows; on Linux it may require `sudo apt install python3-tk`.
+All are widely maintained, pip-installable, and have no C-extension compilation requirements on Windows. `tkinter` is part of the Python standard library and requires no separate installation on Windows; on Linux it may require `sudo apt install python3-tk`. `joblib` (used for model persistence) is installed automatically as a dependency of `scikit-learn` — no separate entry in `requirements.txt` is needed.
+
+> **Note:** After setting up the virtual environment and verifying everything works, run `pip freeze > requirements.txt` to replace these minimum-version specifiers with exact pinned versions (e.g. `pandas==2.2.1`) for fully reproducible installs across machines.
 
 ---
 
