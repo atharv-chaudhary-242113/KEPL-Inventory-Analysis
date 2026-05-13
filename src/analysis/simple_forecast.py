@@ -2,7 +2,7 @@
 """
 Simple Forecasting Strategy module.
 
-Executes unadjusted baseline forecasting logic with growth parameters.
+Executes unadjusted baseline forecasting logic parameterized by projected annual growth.
 """
 
 import numpy as np
@@ -13,8 +13,8 @@ from .base_forecast_strategy import BaseForecastStrategy
 
 class SimpleForecastStrategy(BaseForecastStrategy):
     """
-    Computes reorder quantities derived solely from historical consumption averages.
-    Active strategy when inventory stock data is unavailable.
+    Computes reorder quantities derived solely from historical consumption averages,
+    scaled by an expected annual growth projection.
     """
 
     def __init__(self, growth_rate: float = 1.30) -> None:
@@ -22,13 +22,15 @@ class SimpleForecastStrategy(BaseForecastStrategy):
         Initialize the forecast strategy.
 
         Args:
-            growth_rate (float): Multiplier for demand projection. Default 1.30 (30% growth).
+            growth_rate (float): Multiplier for annual demand projection. Default 1.30 (30% annual growth).
         """
         self.growth_rate: float = growth_rate
 
     def compute(self, aggregated_df: pd.DataFrame, closing_stock_df: pd.DataFrame | None = None) -> pd.DataFrame:
         """
-        Execute average-based demand forecast calculations.
+        Execute projected demand calculations.
+        Applying the annual growth rate to the monthly average mathematically yields
+        the projected monthly volume for the upcoming year.
 
         Args:
             aggregated_df (pd.DataFrame): Aggregated historical demand data.

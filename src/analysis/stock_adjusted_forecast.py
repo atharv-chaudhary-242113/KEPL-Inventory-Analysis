@@ -21,7 +21,7 @@ class StockAdjustedForecastStrategy(BaseForecastStrategy):
         Initialize the forecast strategy.
 
         Args:
-            growth_rate (float): Multiplier for demand projection.
+            growth_rate (float): Multiplier for annual demand projection.
         """
         self.growth_rate: float = growth_rate
 

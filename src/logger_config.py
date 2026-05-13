@@ -2,8 +2,8 @@
 """
 Centralised Logging Configuration module.
 
-Establishes deterministic log formatting and rotation policies to ensure
-operational transparency and traceability without relying on working directories.
+Establishes deterministic log formatting and rotation policies.
+Forces handler primacy over third-party library defaults.
 """
 
 import logging
@@ -15,11 +15,13 @@ import os
 def setup_logger() -> None:
     """
     Configure the root logger with dual handlers: file (DEBUG) and console (INFO).
-    Log files are written to a fixed absolute path relative to the project root.
+    Purges any pre-existing handlers established by external dependencies.
     """
     root_logger = logging.getLogger()
+
+    # Force purge existing handlers injected by third-party libraries (e.g., matplotlib)
     if root_logger.hasHandlers():
-        return
+        root_logger.handlers.clear()
 
     root_logger.setLevel(logging.DEBUG)
 
@@ -48,3 +50,6 @@ def setup_logger() -> None:
 
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+
+    # Prevent propagation bypass
+    root_logger.propagate = False

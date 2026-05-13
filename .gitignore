@@ -219,5 +219,4 @@ __marimo__/
 
 # Input Data File
 data
-*.log
-*.xlsx
+logs
