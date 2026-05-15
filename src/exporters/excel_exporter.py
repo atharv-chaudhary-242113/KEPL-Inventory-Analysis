@@ -40,10 +40,6 @@ class ExcelExporter(BaseExporter):
     def export(self, results: dict[str, Any], output_path: str) -> None:
         """
         Execute the workbook generation and persistence protocol.
-
-        Args:
-            results (dict[str, Any]): The analytical payload containing all target dataframes.
-            output_path (str): Target system location for the .xlsx file.
         """
         logger.info("Initiating Excel export to %s", output_path)
 
@@ -76,6 +72,11 @@ class ExcelExporter(BaseExporter):
                 df_lt = DataCleaner.sanitise_for_export(results['lead_times'])
                 df_lt.to_excel(writer, sheet_name='Lead Times', index=False)
                 self._format_generic_sheet(writer.sheets['Lead Times'])
+
+            if 'supplier_risk_report' in results:
+                df_sr = DataCleaner.sanitise_for_export(results['supplier_risk_report'])
+                df_sr.to_excel(writer, sheet_name='Supplier Risk', index=False)
+                self._format_generic_sheet(writer.sheets['Supplier Risk'])
 
             if self.include_anomaly_report and 'anomaly_report' in results:
                 df_ar = DataCleaner.sanitise_for_export(results['anomaly_report'])
