@@ -5,6 +5,7 @@ from .file_selection_view import FileSelectionView
 from .output_config_view import OutputConfigView
 from .results_view import ResultsView
 from .log_view import LogView
+from .ml_training_view import MLTrainingView
 
 
 class MainLayout(QWidget):
@@ -35,19 +36,23 @@ class MainLayout(QWidget):
         self.output_view = OutputConfigView(self.config, self)
         self.results_view = ResultsView()
         self.log_view = LogView()
+        self.ml_view = MLTrainingView(self.config, self)
 
-        self.content_stack.addWidget(self.file_view)
-        self.content_stack.addWidget(self.output_view)
-        self.content_stack.addWidget(self.results_view)
-        self.content_stack.addWidget(self.log_view)
+        self.content_stack.addWidget(self.file_view)     # Index 0
+        self.content_stack.addWidget(self.output_view)   # Index 1
+        self.content_stack.addWidget(self.results_view)  # Index 2
+        self.content_stack.addWidget(self.log_view)      # Index 3
+        self.content_stack.addWidget(self.ml_view)       # Index 4
 
         self.btn_files = self._create_nav_button("📁 File Setup", 0)
         self.btn_output = self._create_nav_button("⚙ Configure Output", 1)
+        self.btn_ml = self._create_nav_button("🧠 Model Training", 4)
         self.btn_results = self._create_nav_button("📊 Run & Results", 2)
         self.btn_logs = self._create_nav_button("📝 Logs", 3)
 
         sidebar_layout.addWidget(self.btn_files)
         sidebar_layout.addWidget(self.btn_output)
+        sidebar_layout.addWidget(self.btn_ml)
         sidebar_layout.addWidget(self.btn_results)
         sidebar_layout.addWidget(self.btn_logs)
         sidebar_layout.addStretch()

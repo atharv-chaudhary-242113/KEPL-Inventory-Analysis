@@ -1,7 +1,7 @@
 # gui/views/output_config_view.py
 import os
 import traceback
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QHBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QHBoxLayout, QCheckBox
 from PyQt6.QtCore import QThread, pyqtSignal
 from gui.widgets.folder_picker import FolderPicker
 from src.pipeline import AnalysisPipeline
@@ -60,7 +60,12 @@ class OutputConfigView(QWidget):
         growth_layout.addWidget(self.growth_edit)
         layout.addLayout(growth_layout)
 
-        layout.addSpacing(30)
+        layout.addSpacing(10)
+        self.ml_checkbox = QCheckBox("Enable ML Time-Series Forecasting (Inference Phase)")
+        self.ml_checkbox.setStyleSheet("font-size: 14px; font-weight: bold; margin-bottom: 20px;")
+        layout.addWidget(self.ml_checkbox)
+
+        layout.addSpacing(20)
         self.run_btn = QPushButton("▶ Run Analysis")
         self.run_btn.setStyleSheet("""
             QPushButton {
@@ -83,6 +88,7 @@ class OutputConfigView(QWidget):
             return
 
         self.config['output_path'] = os.path.join(out_dir, self.name_edit.text())
+        self.config['use_ml_forecast'] = self.ml_checkbox.isChecked()
 
         try:
             growth_input = self.growth_edit.text().strip()
