@@ -23,18 +23,63 @@ class ExcelExporter:
 
     def export(self, results: dict[str, Any], output_path: str) -> None:
         """
-        Write analytical metrics and operational exceptions to respective sheets.
+        Execute the workbook generation and persistence protocol.
 
         Args:
-            results (dict[str, Any]): Consolidated pipeline payloads.
-            output_path (str): Destination file path.
+            results (dict[str, Any]): The analytical payload containing all target dataframes.
+            output_path (str): Target system location for the .xlsx file.
         """
         try:
             os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
-            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-                if 'lead_times' in results and not results['lead_times'].empty:
-                    results['lead_times'].to_excel(writer, sheet_name='Lead Time Stats', index=False)
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+
+            if 'summary_metadata' in results:
+                self._write_summary_sheet(writer, results['summary_metadata'])
+
+            if 'abc_classification' in results:
+                df_abc = DataCleaner.sanitise_for_export(results['abc_classification'])
+                df_abc.to_excel(writer, sheet_name='ABC Classification', index=False)
+                self._format_abc_sheet(writer.sheets['ABC Classification'])
+
+            if 'monthly_forecast' in results:
+                df_mf = DataCleaner.sanitise_for_export(results['monthly_forecast'])
+                df_mf.to_excel(writer, sheet_name='Monthly Forecast', index=False)
+                self._format_forecast_sheet(writer.sheets['Monthly Forecast'])
+
+            if 'quarterly_forecast' in results:
+                df_qf = DataCleaner.sanitise_for_export(results['quarterly_forecast'])
+                df_qf.to_excel(writer, sheet_name='Quarterly Forecast', index=False)
+                self._format_forecast_sheet(writer.sheets['Quarterly Forecast'])
+
+            if 'monthly_breakdown' in results:
+                df_mb = DataCleaner.sanitise_for_export(results['monthly_breakdown'])
+                df_mb.to_excel(writer, sheet_name='Monthly Breakdown', index=False)
+                self._format_generic_sheet(writer.sheets['Monthly Breakdown'])
+
+            if 'lead_times' in results:
+                df_lt = DataCleaner.sanitise_for_export(results['lead_times'])
+                df_lt.to_excel(writer, sheet_name='Lead Times', index=False)
+                self._format_generic_sheet(writer.sheets['Lead Times'])
+
+            if self.include_anomaly_report and 'anomaly_report' in results:
+                df_ar = DataCleaner.sanitise_for_export(results['anomaly_report'])
+                df_ar.to_excel(writer, sheet_name='Anomaly Report', index=False)
+                self._format_generic_sheet(writer.sheets['Anomaly Report'])
+
+            raw_sheets = {
+                'Raw GRN': 'raw_grn',
+                'Raw POV': 'raw_pov',
+                'Raw PV': 'raw_pv'
+            }
+
+            for sheet_name, key in raw_sheets.items():
+                if key in results:
+                    df_raw = DataCleaner.sanitise_for_export(results[key])
+                    df_raw.to_excel(writer, sheet_name=sheet_name, index=False)
+                    self._format_generic_sheet(writer.sheets[sheet_name])
+
+        logger.info("Excel export completed successfully.")
 
                 if 'abc_classification' in results and not results['abc_classification'].empty:
                     results['abc_classification'].to_excel(writer, sheet_name='ABC & Forecast', index=False)

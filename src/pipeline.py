@@ -4,7 +4,7 @@ Orchestration Pipeline module.
 
 Executes the end-to-end analytical protocol. Coordinates data ingestion,
 cleaning, demand aggregation, predictive modeling, anomaly detection,
-forecasting, and final export.
+forecasting, supplier risk segmentation, and final export.
 """
 
 import logging
@@ -18,6 +18,10 @@ from .processors import DataCleaner, ItemLinker, LeadTimeCalculator, LeadTimePre
 from .processors.similarity import SemanticSimilarityStrategy
 from .processors.anomaly_extractor import AnomalyExtractor
 from .analysis import ABCClassifier, AnomalyDetector, SimpleForecastStrategy, StockAdjustedForecastStrategy
+from .processors import DataCleaner, ItemLinker, LeadTimeCalculator, LeadTimePredictor, DemandAggregator, \
+    SupplierAggregator
+from .analysis import ABCClassifier, AnomalyDetector, SimpleForecastStrategy, StockAdjustedForecastStrategy, \
+    SupplierRiskSegmenter
 from .exporters import ExcelExporter
 
 
@@ -31,22 +35,9 @@ class AnalysisPipeline:
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
-        """
-        Initialize the pipeline with structural constraints.
-
-        Args:
-            config (dict[str, Any]): Dictionary containing file paths, output locations,
-                                     thresholds, and execution flags.
-        """
         self.config: dict[str, Any] = config
 
     def _validate_paths(self) -> None:
-        """
-        Verify the existence of all mandatory input files prior to execution.
-
-        Raises:
-            FileNotFoundError: If a required source document is missing.
-        """
         required_keys = ['pov_path', 'grn_path', 'pv_path']
         for key in required_keys:
             path_str = self.config.get(key)
@@ -54,12 +45,6 @@ class AnalysisPipeline:
                 raise FileNotFoundError(f"Required input file missing: {path_str}")
 
     def run(self) -> dict[str, Any]:
-        """
-        Execute the primary analytical protocol.
-
-        Returns:
-            dict[str, Any]: Dictionary containing all computed dataframes and execution metrics.
-        """
         start_time = time.time()
         logger.info("Starting analysis pipeline")
 
@@ -123,10 +108,18 @@ class AnalysisPipeline:
         lt_predictor.train_or_load(linked_df, lt_stats)
 
         # Step 8: Anomaly Detection (Prices)
+        # Step 8: Supplier Risk Segmentation (K-Means)
+        supp_aggregator = SupplierAggregator()
+        valid_supp, invalid_supp = supp_aggregator.aggregate(pv_clean, linked_df)
+
+        risk_segmenter = SupplierRiskSegmenter()
+        supplier_risk_df = risk_segmenter.segment(valid_supp, invalid_supp)
+
+        # Step 9: Anomaly Detection
         anomaly_detector = AnomalyDetector(contamination=self.config.get('anomaly_contamination', 'auto'))
         anomaly_df = anomaly_detector.detect(pv_clean)
 
-        # Step 9: Forecasting Strategy Resolution
+        # Step 10: Forecasting Strategy Resolution
         growth_rate = self.config.get('growth_rate', 1.30)
         if closing_stock_df is not None:
             strategy = StockAdjustedForecastStrategy(growth_rate=growth_rate)
@@ -147,6 +140,7 @@ class AnalysisPipeline:
             'quarterly_forecast': forecast_df[['Item Details', 'Particulars', 'Unit', 'quarterly_reorder_qty']],
             'lead_times': lt_stats,
             'exceptions': exceptions_df,
+            'supplier_risk_report': supplier_risk_df,
             'anomaly_report': anomaly_df[
                 anomaly_df['is_anomaly']] if 'is_anomaly' in anomaly_df.columns else anomaly_df,
             'raw_grn': grn_clean,
@@ -175,13 +169,10 @@ class AnalysisPipeline:
             'Date Range Start': str(date_min.date()) if date_min is not pd.NaT and date_min else 'N/A',
             'Date Range End': str(date_max.date()) if date_max is not pd.NaT and date_max else 'N/A',
             'Total Items Processed': len(abc_df),
-            'Class A Items': len(abc_df[abc_df['abc_class'] == 'A']) if 'abc_class' in abc_df.columns else 0,
-            'Class B Items': len(abc_df[abc_df['abc_class'] == 'B']) if 'abc_class' in abc_df.columns else 0,
-            'Class C Items': len(abc_df[abc_df['abc_class'] == 'C']) if 'abc_class' in abc_df.columns else 0,
             'Execution Time (s)': round(duration, 2)
         }
 
-        # Step 10: Export Protocol
+        # Step 11: Export Protocol
         output_path = self.config.get('output_path')
         if output_path:
             exporter = ExcelExporter(config=self.config)
