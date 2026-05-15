@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import gc
 
 from .base_similarity import BaseSimilarityStrategy
 
@@ -16,10 +17,41 @@ logger = logging.getLogger(__name__)
 
 class TfidfSimilarityStrategy(BaseSimilarityStrategy):
     """
-    Legacy statistical similarity approach utilizing character n-grams and cosine distance.
+    Batched statistical similarity approach utilizing character n-grams and sparse cosine distance.
     """
 
-    def flag_similar(self, df: pd.DataFrame, column: str, threshold: float) -> None:
+    def compute_similarity_in_chunks(self, tfidf_matrix, unique_entities: np.ndarray, threshold: float,
+                                     batch_size: int = 1000) -> set:
+        num_rows = tfidf_matrix.shape[0]
+        flagged: set[tuple[str, str]] = set()
+
+        for start_idx in range(0, num_rows, batch_size):
+            end_idx = min(start_idx + batch_size, num_rows)
+            chunk = tfidf_matrix[start_idx:end_idx]
+
+            similarity_chunk = cosine_similarity(chunk, tfidf_matrix, dense_output=False)
+
+            # Extract upper triangle coordinates that exceed threshold
+            coo = similarity_chunk.tocoo()
+            for i_chunk, j, v in zip(coo.row, coo.col, coo.data):
+                i = start_idx + i_chunk
+                if i < j and v >= threshold:
+                    e1, e2 = str(unique_entities[i]), str(unique_entities[j])
+                    pair = tuple(sorted([e1, e2]))
+                    if pair not in flagged:
+                        flagged.add(pair)
+                        logger.warning(
+                            "Similar entity detected: '%s' vs '%s' [score: %.3f]",
+                            e1, e2, v
+                        )
+
+            del chunk
+            del similarity_chunk
+            gc.collect()
+
+        return flagged
+
+    def flag_similar(self, df: pd.DataFrame, column: str, threshold: float, batch_size: int = 1000) -> None:
         if not (0.5 <= threshold <= 1.0):
             raise ValueError(f"Threshold {threshold} invalid. Must be within [0.5, 1.0].")
 
@@ -32,19 +64,5 @@ class TfidfSimilarityStrategy(BaseSimilarityStrategy):
 
         vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 4))
         tfidf_matrix = vectorizer.fit_transform(unique_entities)
-        sim_matrix: np.ndarray = cosine_similarity(tfidf_matrix)
 
-        np.fill_diagonal(sim_matrix, 0)
-        indices = np.where(sim_matrix >= threshold)
-
-        flagged: set[tuple[str, str]] = set()
-        for i, j in zip(indices[0], indices[1]):
-            if i < j:
-                e1, e2 = unique_entities[i], unique_entities[j]
-                pair = tuple(sorted([e1, e2]))
-                if pair not in flagged:
-                    flagged.add(pair)
-                    logger.warning(
-                        "Similar %s detected: '%s' vs '%s' [score: %.3f]",
-                        column, e1, e2, sim_matrix[i, j]
-                    )
+        self.compute_similarity_in_chunks(tfidf_matrix, unique_entities, threshold, batch_size)

@@ -88,7 +88,10 @@ class OutputConfigView(QWidget):
             return
 
         self.config['output_path'] = os.path.join(out_dir, self.name_edit.text())
-        self.config['use_ml_forecast'] = self.ml_checkbox.isChecked()
+
+        # Fixed Configuration Keys for Pipeline Injection
+        self.config['use_xgboost'] = self.ml_checkbox.isChecked()
+        self.config['models_dir'] = os.path.abspath('models')
 
         try:
             growth_input = self.growth_edit.text().strip()

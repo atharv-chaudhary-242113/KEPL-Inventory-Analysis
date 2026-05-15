@@ -1,12 +1,13 @@
 # gui/views/ml_training_view.py
 import logging
 from pathlib import Path
+import gc
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton,
                              QTextEdit, QProgressBar, QMessageBox)
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.loaders.pv_loader import PVLoader
+from src.pipeline import AnalysisPipeline, PipelineConfig
 from src.processors.time_series_trainer import TimeSeriesTrainer
 
 logger = logging.getLogger(__name__)
@@ -24,25 +25,24 @@ class MLTrainingWorker(QThread):
 
     def run(self) -> None:
         try:
-            pv_path = self.config.get('pv_path')
-            if not pv_path or not Path(pv_path).exists():
-                self.error.emit("Valid Purchase Vouchers path required for ML training.")
-                return
+            is_lite_mode = self.config.get('is_lite_mode', True)
+            pipeline_config = PipelineConfig(is_lite_mode=is_lite_mode)
 
-            self.progress.emit("Loading chronological purchase data...")
-            raw_pv_df = PVLoader().load(pv_path)
+            self.progress.emit("Initializing shared data preparation layer...")
+            pipeline = AnalysisPipeline(self.config)
 
-            if 'Date' in raw_pv_df.columns:
-                raw_pv_df['Date'] = raw_pv_df['Date'].ffill()
-            if 'Item Details' in raw_pv_df.columns:
-                raw_pv_df['Item Details'] = raw_pv_df['Item Details'].astype(str).str.strip().str.lower()
-            if 'Particulars' in raw_pv_df.columns:
-                raw_pv_df['Particulars'] = raw_pv_df['Particulars'].astype(str).str.strip().str.lower()
+            self.progress.emit("Running batched data ingestion & NLP semantic deduplication...")
+            clean_datasets = pipeline.prepare_clean_data(pipeline_config)
+            clean_pv_df = clean_datasets['PV']
 
-            self.progress.emit(f"Initiating Time-Series Analysis across {len(raw_pv_df)} records...")
+            self.progress.emit(f"Initiating Time-Series Analysis across {len(clean_pv_df)} standardized records...")
             trainer = TimeSeriesTrainer(min_months=6)
 
-            metrics = trainer.train_models(raw_pv_df, self.models_dir)
+            metrics = trainer.train_models(clean_pv_df, self.models_dir)
+
+            # Immediate explicit memory reclamation for 4GB constraints
+            pipeline_config.reclaim_memory(clean_datasets, clean_pv_df)
+
             self.finished.emit(metrics)
         except Exception as e:
             self.error.emit(str(e))
@@ -53,6 +53,9 @@ class MLTrainingView(QWidget):
         super().__init__()
         self.config = config
         self.main_layout = main_layout
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(40, 40, 40, 40)
 
@@ -61,7 +64,8 @@ class MLTrainingView(QWidget):
         layout.addWidget(title)
 
         info = QLabel(
-            "Initiate autoregressive model fitting. Chronological splits and MAE validation are strictly enforced. Inferior models are discarded.")
+            "Initiate autoregressive model fitting on semantically deduplicated datasets. "
+            "Chronological splits and MAE validation are strictly enforced. Inferior models are discarded.")
         info.setStyleSheet("font-size: 14px; margin-bottom: 20px; color: #555;")
         layout.addWidget(info)
 
@@ -92,7 +96,7 @@ class MLTrainingView(QWidget):
 
         self.run_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
-        self.log_output.append("Initializing worker thread...\n")
+        self.log_output.append("Initializing worker thread with low-memory constraints...\n")
 
         self.worker = MLTrainingWorker(self.config)
         self.worker.progress.connect(self.log_output.append)

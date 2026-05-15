@@ -1,5 +1,5 @@
 # gui/views/main_window.py
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QStackedWidget, QLabel
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QStackedWidget, QLabel, QCheckBox
 from PyQt6.QtCore import Qt
 from .file_selection_view import FileSelectionView
 from .output_config_view import OutputConfigView
@@ -12,6 +12,7 @@ class MainLayout(QWidget):
     def __init__(self, config: dict) -> None:
         super().__init__()
         self.config = config
+        self.config['is_lite_mode'] = True  # Default to 4GB safety mode
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -29,6 +30,12 @@ class MainLayout(QWidget):
         title.setStyleSheet("font-size: 20px; font-weight: bold; padding: 20px 10px; color: #4facfe;")
         sidebar_layout.addWidget(title)
 
+        self.lite_mode_checkbox = QCheckBox("Low-Memory Mode (4GB RAM)")
+        self.lite_mode_checkbox.setChecked(True)
+        self.lite_mode_checkbox.setStyleSheet("margin-left: 15px; margin-bottom: 10px; color: #ffffff;")
+        self.lite_mode_checkbox.stateChanged.connect(self._toggle_lite_mode)
+        sidebar_layout.addWidget(self.lite_mode_checkbox)
+
         self.content_stack = QStackedWidget()
         self.content_stack.setStyleSheet("background-color: #ffffff; color: #333333;")
 
@@ -38,11 +45,11 @@ class MainLayout(QWidget):
         self.log_view = LogView()
         self.ml_view = MLTrainingView(self.config, self)
 
-        self.content_stack.addWidget(self.file_view)     # Index 0
-        self.content_stack.addWidget(self.output_view)   # Index 1
+        self.content_stack.addWidget(self.file_view)  # Index 0
+        self.content_stack.addWidget(self.output_view)  # Index 1
         self.content_stack.addWidget(self.results_view)  # Index 2
-        self.content_stack.addWidget(self.log_view)      # Index 3
-        self.content_stack.addWidget(self.ml_view)       # Index 4
+        self.content_stack.addWidget(self.log_view)  # Index 3
+        self.content_stack.addWidget(self.ml_view)  # Index 4
 
         self.btn_files = self._create_nav_button("📁 File Setup", 0)
         self.btn_output = self._create_nav_button("⚙ Configure Output", 1)
@@ -71,6 +78,9 @@ class MainLayout(QWidget):
         """)
         btn.clicked.connect(lambda: self.content_stack.setCurrentIndex(index))
         return btn
+
+    def _toggle_lite_mode(self, state: int) -> None:
+        self.config['is_lite_mode'] = (state == 2)
 
     def show_results(self, results: dict) -> None:
         self.results_view.display_results(results)
