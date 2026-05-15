@@ -15,8 +15,10 @@ import pandas as pd
 
 from .loaders import POVLoader, GRNLoader, PVLoader, ClosingStockLoader
 from .processors import DataCleaner, ItemLinker, LeadTimeCalculator, LeadTimePredictor, DemandAggregator
+from .processors.similarity import SemanticSimilarityStrategy
 from .analysis import ABCClassifier, AnomalyDetector, SimpleForecastStrategy, StockAdjustedForecastStrategy
 from .exporters import ExcelExporter
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +76,22 @@ class AnalysisPipeline:
         # Step 3: Cleaning
         datasets = {'POV': pov_df, 'GRN': grn_df, 'PV': pv_df}
         clean_datasets = {}
+
+        # Instantiate similarity strategy
+        similarity_strategy = SemanticSimilarityStrategy()
+
         for name, df in datasets.items():
             df = DataCleaner.forward_fill_voucher_fields(df)
             df = DataCleaner.cast_numeric_columns(df)
             df = DataCleaner.drop_non_item_rows(df)
             df = DataCleaner.normalise_item_names(df)
-            DataCleaner.flag_similar_item_names(df)
-            DataCleaner.flag_similar_supplier_names(df)
+
+            # Item Details duplication check purged. Absolute nomenclature enforced.
+            DataCleaner.flag_similar_entities(df, 'Particulars', similarity_strategy, threshold=0.85)
+
             clean_datasets[name] = df
 
+        # Restore strict variable assignments for downstream processing
         pov_clean = clean_datasets['POV']
         grn_clean = clean_datasets['GRN']
         pv_clean = clean_datasets['PV']
