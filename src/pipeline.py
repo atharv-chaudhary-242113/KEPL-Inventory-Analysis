@@ -16,6 +16,7 @@ import pandas as pd
 from .loaders import POVLoader, GRNLoader, PVLoader, ClosingStockLoader
 from .processors import DataCleaner, ItemLinker, LeadTimeCalculator, LeadTimePredictor, DemandAggregator
 from .processors.similarity import SemanticSimilarityStrategy
+from .processors.anomaly_extractor import AnomalyExtractor
 from .analysis import ABCClassifier, AnomalyDetector, SimpleForecastStrategy, StockAdjustedForecastStrategy
 from .exporters import ExcelExporter
 
@@ -113,11 +114,15 @@ class AnalysisPipeline:
         lt_calculator = LeadTimeCalculator()
         lt_stats = lt_calculator.compute(linked_df)
 
+        # Step 6.5: Exception Extraction (Anti-Join)
+        anomaly_extractor = AnomalyExtractor()
+        exceptions_df = anomaly_extractor.extract_exceptions(pov_clean, grn_clean)
+
         # Step 7: Predictive Modeling
         lt_predictor = LeadTimePredictor()
         lt_predictor.train_or_load(linked_df, lt_stats)
 
-        # Step 8: Anomaly Detection
+        # Step 8: Anomaly Detection (Prices)
         anomaly_detector = AnomalyDetector(contamination=self.config.get('anomaly_contamination', 'auto'))
         anomaly_df = anomaly_detector.detect(pv_clean)
 
@@ -141,6 +146,7 @@ class AnalysisPipeline:
             'monthly_forecast': forecast_df[['Item Details', 'Particulars', 'Unit', 'monthly_reorder_qty']],
             'quarterly_forecast': forecast_df[['Item Details', 'Particulars', 'Unit', 'quarterly_reorder_qty']],
             'lead_times': lt_stats,
+            'exceptions': exceptions_df,
             'anomaly_report': anomaly_df[
                 anomaly_df['is_anomaly']] if 'is_anomaly' in anomaly_df.columns else anomaly_df,
             'raw_grn': grn_clean,
