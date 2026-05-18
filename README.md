@@ -280,137 +280,74 @@ If the optimal silhouette score drops below the confidence threshold (
 
 ## **7. Directory Structure**
 
+```
 procurement-analytics/
-
 ├── .gitignore
-
 ├── README.md
-
 ├── pyproject.toml                 # Centralized uv package definition
-
 ├── run_gui.py                     # PyQt6 GUI Application Entry Point
-
 ├── logs/                          # System execution logs
-
 │   └── app.log
-
 ├── models/                        # Serialized XGBoost models (.joblib)
-
 ├── output/                        # Default export folder for Excel reports
-
 ├── gui/                           # PyQt6 User Interface package
-
 │   ├── __init__.py
-
 │   ├── app.py                     # Main QMainWindow Setup
-
 │   ├── views/
-
 │   │   ├── __init__.py
-
 │   │   ├── file_selection_view.py # File picker interfaces
-
 │   │   ├── log_view.py            # Real-time scrolling diagnostic log terminal
-
 │   │   ├── main_window.py         # App shell (navigation, layout, sidebars)
-
 │   │   ├── ml_training_view.py    # XGBoost training controller
-
 │   │   ├── output_config_view.py  # Run and output path configurations
-
 │   │   └── results_view.py        # Tabular displays & embedded Pareto chart
-
 │   └── widgets/
-
 │       ├── __init__.py
-
 │       ├── abc_chart_widget.py    # Embedded Matplotlib Canvas
-
 │       ├── file_picker.py         # File picker component
-
 │       └── folder_picker.py       # Directory picker component
-
 └── src/                           # Central Analytics Engine
-
 ├── __init__.py
-
 ├── logger_config.py           # Logging, formatters, and rotation rules
-
 ├── pipeline.py                # Main orchestration pipeline
-
 ├── analysis/                  # Analytics and forecasting strategies
-
-│   ├── __init__.py
-
-│   ├── abc_classifier.py      # Pareto ABC classification
-
-│   ├── anomaly_detector.py    # Isolation Forest transaction anomalies
-
-│   ├── base_forecast_strategy.py
-
-│   ├── ensemble_forecast.py   # Dynamic MAPE ensemble selector
-
-│   ├── holt_winters_forecast.py# Triple Exponential Smoothing
-
-│   ├── simple_forecast.py     # Growth-scaled baseline forecasts
-
-│   ├── stock_adjusted_forecast.py
-
-│   ├── supplier_risk_segmenter.py # Unsupervised K-Means risk clustering
-
-│   └── xgboost_forecast.py    # XGBoost inference execution
-
+│   ├── __init__.py
+│   ├── abc_classifier.py      # Pareto ABC classification
+│   ├── anomaly_detector.py    # Isolation Forest transaction anomalies
+│   ├── base_forecast_strategy.py
+│   ├── ensemble_forecast.py   # Dynamic MAPE ensemble selector
+│   ├── holt_winters_forecast.py# Triple Exponential Smoothing
+│   ├── simple_forecast.py     # Growth-scaled baseline forecasts
+│   ├── stock_adjusted_forecast.py
+│   ├── supplier_risk_segmenter.py # Unsupervised K-Means risk clustering
+│   └── xgboost_forecast.py    # XGBoost inference execution
 ├── exporters/                 # Output serialization
-
-│   ├── __init__.py
-
-│   ├── base_exporter.py
-
-│   └── excel_exporter.py      # openpyxl writer with custom formatting
-
+│   ├── __init__.py
+│   ├── base_exporter.py
+│   └── excel_exporter.py      # openpyxl writer with custom formatting
 ├── loaders/                   # Ingestion modules
-
-│   ├── __init__.py
-
-│   ├── base_loader.py         # Parsing and downcasting mechanics
-
-│   ├── closing_stock_loader.py
-
-│   ├── grn_loader.py
-
-│   ├── pov_loader.py
-
-│   └── pv_loader.py
-
+│   ├── __init__.py
+│   ├── base_loader.py         # Parsing and downcasting mechanics
+│   ├── closing_stock_loader.py
+│   ├── grn_loader.py
+│   ├── pov_loader.py
+│   └── pv_loader.py
 └── processors/                # Data processors
-
-├── __init__.py
-
-├── anomaly_extractor.py   # Relational anti-join exception engine
-
-├── data_cleaner.py        # Cleans and sanitizes strings for export
-
-├── demand_aggregator.py   # Aggregates consumption metrics
-
-├── item_linker.py         # POV to GRN document matcher
-
-├── lead_time_calculator.py# Lead time descriptive statistics
-
-├── lead_time_predictor.py # Random Forest model for lead times
-
-├── supplier_aggregator.py # Prepares vendor operational feature matrices
-
-├── time_series_trainer.py # Training coordinator for autoregressive models
-
-└── similarity/            # Similarity detection strategies
-
-├── __init__.py
-
-├── base_similarity.py
-
-├── semantic_similarity.py # SBERT semantic encoder
-
-└── tfidf_similarity.py    # Sparse character-level distances
+    └── similarity/            # Similarity detection strategies
+        ├── __init__.py
+        ├── base_similarity.py
+        ├── semantic_similarity.py # SBERT semantic encoder
+        └── tfidf_similarity.py    # Sparse character-level distances
+    ├── __init__.py
+    ├── anomaly_extractor.py   # Relational anti-join exception engine
+    ├── data_cleaner.py        # Cleans and sanitizes strings for export
+    ├── demand_aggregator.py   # Aggregates consumption metrics
+    ├── item_linker.py         # POV to GRN document matcher
+    ├── lead_time_calculator.py# Lead time descriptive statistics
+    ├── lead_time_predictor.py # Random Forest model for lead times
+    ├── supplier_aggregator.py # Prepares vendor operational feature matrices
+    ├── time_series_trainer.py # Training coordinator for autoregressive models
+```
 
 ## **8. Output Inventory Reports**
 
