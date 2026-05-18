@@ -1,0 +1,23 @@
+[project]
+name = "kepl-inventory-analysis"
+version = "1.0.0"
+description = "Procurement Analytics System for KEPL"
+requires-python = "==3.12.*"
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "matplotlib>=3.7",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "PyQt6==6.6.1",
+    "PyQt6-Qt6==6.6.1",
+    "PyQt6-sip==13.6.0",
+    "xgboost>=2.0",
+    "torch>=2.0",
+    "sentence-transformers>=2.2",
+    "statsmodels==0.14.6"
+]
+
+[tool.uv]
+managed = true
+package = false
