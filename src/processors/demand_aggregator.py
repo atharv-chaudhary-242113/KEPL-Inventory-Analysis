@@ -33,7 +33,7 @@ class DemandAggregator:
         if months_covered == 0:
             months_covered = 1
 
-        agg_df = pv_df.groupby(['Item Details', 'Particulars', 'Unit']).apply(
+        agg_df = pv_df.groupby(['Item Details', 'Particulars', 'Unit'], observed=True).apply(
             lambda x: pd.Series({
                 'total_qty': x['Qty.'].sum(),
                 'total_value': x['Amount'].sum(),

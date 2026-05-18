@@ -18,7 +18,7 @@ from .processors.similarity import SemanticSimilarityStrategy
 from .processors.anomaly_extractor import AnomalyExtractor
 from .analysis import (ABCClassifier, SimpleForecastStrategy,
                        StockAdjustedForecastStrategy, SupplierRiskSegmenter,
-                       XGBoostForecastStrategy)
+                       XGBoostForecastStrategy, HoltWintersForecastStrategy)
 from .exporters import ExcelExporter
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class AnalysisPipeline:
         anomaly_extractor = AnomalyExtractor()
         exceptions_df = anomaly_extractor.extract_exceptions(pov_clean, grn_clean)
 
-        # 5. ML Time Series Forecast Strategy Resolution
+        # 5. Forecast Strategy Resolution Layer
         aggregator = DemandAggregator()
         aggregated_df = aggregator.compute(pv_clean)
 
@@ -126,13 +126,30 @@ class AnalysisPipeline:
         base_strategy_cls = StockAdjustedForecastStrategy if closing_stock_df is not None else SimpleForecastStrategy
         base_strategy = base_strategy_cls(growth_rate=growth_rate)
 
-        # Dependency Injection for ML Models
-        use_xgboost = self.config.get('use_xgboost', False)
-        models_dir = self.config.get('models_dir')
+        # Automated detection of structural model assets
+        models_dir_param = self.config.get('models_dir')
+        models_dir = Path(models_dir_param) if models_dir_param else None
+
+        models_exist = False
+        if models_dir and models_dir.exists():
+            models_exist = any(models_dir.glob("*.joblib"))
+
+        # Prioritize explicit configurations, then fall back based on model state
+        use_xgboost = self.config.get('use_xgboost', models_exist)
+        use_holt_winters = self.config.get('use_holt_winters', not use_xgboost)
 
         if use_xgboost and models_dir:
             strategy = XGBoostForecastStrategy(
                 models_dir=models_dir,
+                fallback_strategy=base_strategy,
+                growth_rate=growth_rate
+            )
+        elif use_holt_winters:
+            strategy = HoltWintersForecastStrategy(
+                raw_pv_df=pv_clean,
+                seasonal_periods=self.config.get('holt_winters_seasonal_periods', 12),
+                trend=self.config.get('holt_winters_trend', 'add'),
+                seasonal=self.config.get('holt_winters_seasonal', 'add'),
                 fallback_strategy=base_strategy,
                 growth_rate=growth_rate
             )
@@ -156,8 +173,6 @@ class AnalysisPipeline:
         config.reclaim_memory(valid_supp, invalid_supp, linked_df)
 
         # 7. Compile Results and Export
-
-        # Dynamically append ML columns if present to uphold Open-Closed Principle
         core_cols = ['Item Details', 'Particulars', 'Unit']
         ml_cols = ['Forecast_Algorithm', 'Backtest_MAPE_%']
         present_ml_cols = [col for col in ml_cols if col in forecast_df.columns]
@@ -178,11 +193,8 @@ class AnalysisPipeline:
             'raw_pv': pv_clean,
         }
 
-        # Calculate Date Bounds
         date_min = pv_clean['Date'].min() if 'Date' in pv_clean.columns and not pv_clean.empty else None
         date_max = pv_clean['Date'].max() if 'Date' in pv_clean.columns and not pv_clean.empty else None
-
-        # Calculate Classification Distribution
         class_counts = forecast_df['abc_class'].value_counts() if 'abc_class' in forecast_df.columns else {}
 
         duration = time.time() - start_time

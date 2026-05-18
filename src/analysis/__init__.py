@@ -1,25 +1,22 @@
 # src/analysis/__init__.py
 """
-Analysis module.
-
-Exposes analytical components for classification, unsupervised anomaly detection,
-forecasting strategies, and supplier risk segmentation.
+Analysis initialization layer exposing classification and forecasting strategies.
 """
 
 from .abc_classifier import ABCClassifier
+from .supplier_risk_segmenter import SupplierRiskSegmenter
 from .base_forecast_strategy import BaseForecastStrategy
 from .simple_forecast import SimpleForecastStrategy
 from .stock_adjusted_forecast import StockAdjustedForecastStrategy
-from .supplier_risk_segmenter import SupplierRiskSegmenter
 from .xgboost_forecast import XGBoostForecastStrategy
+from .holt_winters_forecast import HoltWintersForecastStrategy
 
 __all__ = [
     "ABCClassifier",
-    "XGBoostForecastStrategy",
+    "SupplierRiskSegmenter",
     "BaseForecastStrategy",
     "SimpleForecastStrategy",
     "StockAdjustedForecastStrategy",
-    "SupplierRiskSegmenter"
+    "XGBoostForecastStrategy",
+    "HoltWintersForecastStrategy",
 ]
-
-from .xgboost_forecast import XGBoostForecastStrategy

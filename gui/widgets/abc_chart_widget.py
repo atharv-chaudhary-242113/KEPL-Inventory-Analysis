@@ -1,5 +1,6 @@
 # gui/widgets/abc_chart_widget.py
 import pandas as pd
+import numpy as np
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -28,6 +29,16 @@ class ABCChartWidget(QWidget):
         y_val = df_sorted['total_value'].values
         y_pct = df_sorted['cumulative_value_pct'].values
 
+        # Enforce logarithmic scaling on the primary axis to handle hyper-skewed distributions
+        ax1.set_yscale('log', nonpositive='clip')
+
+        # Establish safe lower bounds for the log scale tracking
+        min_positive_val = y_val[y_val > 0].min() if (y_val > 0).any() else 1.0
+        max_val = y_val.max() if y_val.max() > 0 else 10.0
+
+        # Apply a small padding buffer to the log boundaries
+        ax1.set_ylim(bottom=max(0.1, min_positive_val * 0.5), top=max_val * 2.0)
+
         # --- Derive A/B and B/C boundaries from classifier output ---
         a_indices = df_sorted.index[df_sorted['abc_class'] == 'A']
         b_indices = df_sorted.index[df_sorted['abc_class'] == 'B']
@@ -50,13 +61,15 @@ class ABCChartWidget(QWidget):
         ax2.axhline(y_ab, color='steelblue', linestyle='--', linewidth=0.9)
         ax2.axhline(y_bc, color='steelblue', linestyle='--', linewidth=0.9)
 
-        # --- Bars (left axis) and cumulative line (right axis) ---
-        bar_width = max(100.0 / n, 0.5)  # minimum 0.5% width so bars render visibly
-        ax1.bar(x_pct, y_val, width=bar_width, color='#003049', alpha=1.0, zorder=2)
+        # High-density visualization override: Use fill_between to eliminate bar overlap artifacts
+        ax1.fill_between(x_pct, max(0.1, min_positive_val * 0.5), y_val,
+                         step="pre", color='#003049', alpha=0.85, zorder=2)
+
+        # Cumulative trajectory line
         ax2.plot(x_pct, y_pct, color='#ff0844', linewidth=2, zorder=3)
 
-        # --- Zone labels via axes-fraction transform (immune to ylim changes) ---
-        label_y_frac = 0.55
+        # --- Zone labels via axes-fraction transform ---
+        label_y_frac = 0.85
         ax1.text(x_ab / 200, label_y_frac, 'A', transform=ax1.transAxes,
                  ha='center', fontsize=13, color='#000000', fontweight='bold')
         ax1.text((x_ab + x_bc) / 200, label_y_frac, 'B', transform=ax1.transAxes,
@@ -90,14 +103,14 @@ class ABCChartWidget(QWidget):
             if t in boundary_y:
                 label.set_fontweight('bold')
 
-
-        # --- Axis limits, labels, title ---
         ax1.set_xlim(0, 100)
         ax2.set_ylim(0, 100)
         ax1.set_xlabel('Cumulative % of items in inventory', fontweight='bold')
-        ax1.set_ylabel('Total Value', color='#4facfe', fontweight='bold')
+        ax1.set_ylabel('Total Value (Log Scale)', color='#4facfe', fontweight='bold')
         ax2.set_ylabel('Cumulative % of total inventory value', color='#ff0844', fontweight='bold')
-        ax1.set_title('ABC Pareto Analysis', fontweight='bold')
+        ax1.set_title('ABC Pareto Analysis (Logarithmic Resolution)', fontweight='bold')
+
+        ax1.grid(True, which="both", linestyle=":", alpha=0.3, zorder=0)
 
         self.figure.tight_layout()
         self.canvas.draw()
