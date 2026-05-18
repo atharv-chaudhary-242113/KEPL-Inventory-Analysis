@@ -1,5 +1,6 @@
 # gui/views/output_config_view.py
 import os
+from pathlib import Path
 import traceback
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QLineEdit, QMessageBox, QHBoxLayout, QCheckBox
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -91,7 +92,7 @@ class OutputConfigView(QWidget):
 
         # Fixed Configuration Keys for Pipeline Injection
         self.config['use_xgboost'] = self.ml_checkbox.isChecked()
-        self.config['models_dir'] = os.path.abspath('models')
+        self.config['models_dir'] = str(Path(__file__).resolve().parent.parent.parent / 'models')
 
         try:
             growth_input = self.growth_edit.text().strip()

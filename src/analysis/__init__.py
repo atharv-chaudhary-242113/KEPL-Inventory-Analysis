@@ -10,6 +10,7 @@ from .simple_forecast import SimpleForecastStrategy
 from .stock_adjusted_forecast import StockAdjustedForecastStrategy
 from .xgboost_forecast import XGBoostForecastStrategy
 from .holt_winters_forecast import HoltWintersForecastStrategy
+from .ensemble_forecast import DynamicEnsembleForecastStrategy
 
 __all__ = [
     "ABCClassifier",
@@ -19,4 +20,5 @@ __all__ = [
     "StockAdjustedForecastStrategy",
     "XGBoostForecastStrategy",
     "HoltWintersForecastStrategy",
+    "DynamicEnsembleForecastStrategy"
 ]

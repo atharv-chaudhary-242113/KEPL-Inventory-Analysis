@@ -18,7 +18,9 @@ from .processors.similarity import SemanticSimilarityStrategy
 from .processors.anomaly_extractor import AnomalyExtractor
 from .analysis import (ABCClassifier, SimpleForecastStrategy,
                        StockAdjustedForecastStrategy, SupplierRiskSegmenter,
-                       XGBoostForecastStrategy, HoltWintersForecastStrategy)
+                       XGBoostForecastStrategy, HoltWintersForecastStrategy,
+                       DynamicEnsembleForecastStrategy)
+from .analysis.anomaly_detector import AnomalyDetector
 from .exporters import ExcelExporter
 
 logger = logging.getLogger(__name__)
@@ -55,12 +57,11 @@ class AnalysisPipeline:
 
     def prepare_clean_data(self, config: PipelineConfig) -> dict[str, pd.DataFrame]:
         """
-        Unified ingestion and semantic deduplication block.
-        Ensures training and inference evaluate identical token spaces.
+        Unified Ingestion and Semantic Deduplication Layer.
+        Ensures identical token representation across all operations.
         """
         self._validate_paths()
 
-        # 1. Load & Downcast
         pov_df = POVLoader().load(self.config['pov_path'])
         grn_df = GRNLoader().load(self.config['grn_path'])
         pv_df = PVLoader().load(self.config['pv_path'])
@@ -77,7 +78,6 @@ class AnalysisPipeline:
 
         config.reclaim_memory(pov_df, grn_df, pv_df, datasets)
 
-        # 2. Semantic Deduplication applied directly to baseline matrices
         similarity_strategy = SemanticSimilarityStrategy()
         DataCleaner.flag_similar_entities(clean_datasets['PV'], 'Particulars', similarity_strategy, threshold=0.85)
         DataCleaner.flag_similar_entities(clean_datasets['POV'], 'Particulars', similarity_strategy, threshold=0.85)
@@ -92,7 +92,6 @@ class AnalysisPipeline:
         is_lite_mode = self.config.get('is_lite_mode', True)
         config = PipelineConfig(is_lite_mode=is_lite_mode)
 
-        # Execute shared data prep stage
         clean_datasets = self.prepare_clean_data(config)
 
         pov_clean = clean_datasets['POV']
@@ -113,6 +112,10 @@ class AnalysisPipeline:
         anomaly_extractor = AnomalyExtractor()
         exceptions_df = anomaly_extractor.extract_exceptions(pov_clean, grn_clean)
 
+        # 4.5 Anomaly Detection Protocol (Isolation Forest Execution)
+        anomaly_detector = AnomalyDetector()
+        anomaly_report_df = anomaly_detector.detect(pv_clean)
+
         # 5. Forecast Strategy Resolution Layer
         aggregator = DemandAggregator()
         aggregated_df = aggregator.compute(pv_clean)
@@ -126,38 +129,34 @@ class AnalysisPipeline:
         base_strategy_cls = StockAdjustedForecastStrategy if closing_stock_df is not None else SimpleForecastStrategy
         base_strategy = base_strategy_cls(growth_rate=growth_rate)
 
-        # Automated detection of structural model assets
         models_dir_param = self.config.get('models_dir')
-        models_dir = Path(models_dir_param) if models_dir_param else None
+        models_dir = Path(models_dir_param) if models_dir_param else Path('models')
 
-        models_exist = False
-        if models_dir and models_dir.exists():
-            models_exist = any(models_dir.glob("*.joblib"))
+        # Instantiate independent processing modules to supply the tracking matrix
+        xgb_strategy = XGBoostForecastStrategy(
+            models_dir=models_dir,
+            fallback_strategy=base_strategy,
+            growth_rate=growth_rate
+        )
 
-        # Prioritize explicit configurations, then fall back based on model state
-        use_xgboost = self.config.get('use_xgboost', models_exist)
-        use_holt_winters = self.config.get('use_holt_winters', not use_xgboost)
+        hw_strategy = HoltWintersForecastStrategy(
+            raw_pv_df=pv_clean,
+            seasonal_periods=self.config.get('holt_winters_seasonal_periods', 12),
+            trend=self.config.get('holt_winters_trend', 'add'),
+            seasonal=self.config.get('holt_winters_seasonal', 'add'),
+            fallback_strategy=base_strategy,
+            growth_rate=growth_rate
+        )
 
-        if use_xgboost and models_dir:
-            strategy = XGBoostForecastStrategy(
-                models_dir=models_dir,
-                fallback_strategy=base_strategy,
-                growth_rate=growth_rate
-            )
-        elif use_holt_winters:
-            strategy = HoltWintersForecastStrategy(
-                raw_pv_df=pv_clean,
-                seasonal_periods=self.config.get('holt_winters_seasonal_periods', 12),
-                trend=self.config.get('holt_winters_trend', 'add'),
-                seasonal=self.config.get('holt_winters_seasonal', 'add'),
-                fallback_strategy=base_strategy,
-                growth_rate=growth_rate
-            )
-        else:
-            strategy = base_strategy
+        # Initialize MAPE-driven selection ensemble to minimize structural overfitting
+        ensemble_strategy = DynamicEnsembleForecastStrategy(
+            xgb_strategy=xgb_strategy,
+            hw_strategy=hw_strategy,
+            fallback_strategy=base_strategy
+        )
 
         try:
-            forecast_df = strategy.compute(abc_df, closing_stock_df)
+            forecast_df = ensemble_strategy.compute(abc_df, closing_stock_df)
         except NotImplementedError as e:
             logger.warning("%s Falling back to base strategy.", str(e))
             forecast_df = base_strategy.compute(abc_df, closing_stock_df)
@@ -187,7 +186,7 @@ class AnalysisPipeline:
             'lead_times': lt_stats,
             'exceptions': exceptions_df,
             'supplier_risk_report': supplier_risk_df,
-            'anomaly_report': pd.DataFrame(),
+            'anomaly_report': anomaly_report_df,
             'raw_grn': grn_clean,
             'raw_pov': pov_clean,
             'raw_pv': pv_clean,
